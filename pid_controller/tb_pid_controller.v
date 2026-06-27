@@ -26,9 +26,9 @@
 module tb_pid_controller;
 
     // --- NASTAWY PID (stroj tutaj) ---
-    localparam signed [15:0] KP = 16'd50;
-    localparam signed [15:0] KI = 16'd15;
-    localparam signed [15:0] KD = 16'd2;
+    localparam signed [15:0] KP = 16'sd500;
+    localparam signed [15:0] KI = 16'sd10;
+    localparam signed [15:0] KD = 16'sd20;
 
     // --- DUT ---
     reg                sys_clk    = 1'b0;

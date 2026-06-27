@@ -1,7 +1,7 @@
 module pid_controller #(
-    parameter KP = 16'd256,
-    parameter KI = 16'd26,
-    parameter KD = 16'd50
+    parameter signed [15:0] KP = 16'sd256,
+    parameter signed [15:0] KI = 16'sd26,
+    parameter signed [15:0] KD = 16'sd50
 )(
     input wire sys_clk,
 
@@ -24,6 +24,11 @@ module pid_controller #(
     localparam POSTACTIVE = 2'd2;
     
     reg [1:0] state = FIRST_RUN;
+
+    parameter integer       KP_SHIFT = 0;
+    parameter integer       KI_SHIFT = 5;
+    parameter integer       KD_SHIFT = 0;
+    parameter signed [47:0] I_LIMIT  = 48'sd80000000; // anti-windup NA CALCE
 
 
     initial begin
@@ -53,13 +58,13 @@ module pid_controller #(
         end
 
         if (state == POSTACTIVE) begin
-            p_term <= $signed({{32{error_in[15]}}, error_in}) * $signed({{32{KP[15]}}, KP});
-            i_term <= $signed(integral) * $signed({{32{KI[15]}}, KI});
-            d_term <= $signed({{32{derivative[15]}}, derivative}) * $signed({{32{KD[15]}}, KD});
+            p_term <= (error_in * KP) >>> KP_SHIFT;
+            i_term <= ($signed(integral) * KI) >>> KI_SHIFT;
+            d_term <= ($signed(derivative) * KD) >>> KD_SHIFT;
 
-            pid_out <= $signed({{32{error_in[15]}}, error_in}) * $signed({{32{KP[15]}}, KP}) + 
-                       $signed(integral) * $signed({{32{KI[15]}}, KI}) + 
-                       $signed({{32{KD[15]}}, KD}) * $signed({{32{derivative[15]}}, derivative});
+            pid_out <= ((error_in * KP) >>> KP_SHIFT) + 
+                       (($signed(integral) * KI) >>> KI_SHIFT) + 
+                       (($signed(derivative) * KD) >>> KD_SHIFT);
 
             prev_error <= error_in;
             state <= ACTIVE;
