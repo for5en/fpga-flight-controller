@@ -18,11 +18,32 @@ Each module has a design file (`<name>.v`) and a testbench (`tb_<name>.v`):
 - `fpga-drivers/i2c_master/` — I²C master.
 - `fpga-drivers/pwm_generator/` — servo/ESC-style PWM generator.
 
-To compile and run a module (example: PID controller):
+#### Preferred workflow: `fpga_sim` (the author's convention)
+The author drives simulation with a shell helper called `fpga_sim`. Run it **from
+inside the module's folder** (where `<name>.v` and `tb_<name>.v` live). It compiles
+`tb_<name>.v` + `<name>.v` into the binary `test_<name>`, then runs `vvp`, which dumps
+`test_<name>.vcd` (this matches the `$dumpfile("test_<name>.vcd")` calls in every testbench):
+
+```bash
+cd pid_controller
+fpga_sim pid_controller        # compile + simulate
+fpga_sim pid_controller -k     # also kill any running gtkwave first, then compile + simulate
+fpga_sim pid_controller -g     # kill gtkwave, compile + simulate, then open gtkwave on the .vcd
+```
+
+The `-k` flag exists because closing gtkwave from the terminal with Ctrl+Z hangs it instead
+of quitting; `-k` cleans up the stale windows. `-g` is `-k` plus auto-launching a fresh gtkwave.
+
+`fpga_sim` is defined in the author's `~/.bashrc` on their own machine; on the Cursor Cloud
+VM it has been recreated in the agent's `~/.bashrc` so the same command works there. The
+manual fallback (no helper needed) is:
 ```bash
 iverilog -o /tmp/sim/test_pid_controller pid_controller/tb_pid_controller.v pid_controller/pid_controller.v
-cd /tmp/sim && vvp test_pid_controller   # prints results, writes test_pid_controller.vcd
+cd /tmp/sim && vvp test_pid_controller
 ```
+
+Note: running `fpga_sim` inside the repo folder regenerates the committed `test_<name>`
+binary in place, so it may show up as modified in `git status`; that is expected.
 
 ### Non-obvious notes
 - Compile build outputs to a scratch dir like `/tmp/sim` (or run `vvp` from there). The
