@@ -45,10 +45,10 @@ module pid_controller #(
                 state <= ACTIVE;
             end
             else if (state == ACTIVE) begin
-                if (error_in > 0 && integral > 48'd500000) 
-                    integral <= 48'd500000;
-                else if (error_in < 0 && integral < -48'd500000) 
-                    integral <= -48'd500000;
+                if (error_in > 0 && integral > I_LIMIT) 
+                    integral <= I_LIMIT;
+                else if (error_in < 0 && integral < -I_LIMIT) 
+                    integral <= -I_LIMIT;
                 else 
                     integral <= integral + $signed({{32{error_in[15]}}, error_in});
                 derivative <= error_in - prev_error;
