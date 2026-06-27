@@ -7,9 +7,11 @@
 //   - Stary test wpinal pid_out z powrotem w gyro NATYCHMIAST (petla
 //     algebraiczna), bez bezwladnosci -> blad "skakal" i nie odpowiadal
 //     realnemu dronowi. Calosc trwala ~40 us.
-//   - Tutaj os drona jest modelem 2. rzedu:
-//        moment -> przyspieszenie katowe -> predkosc katowa -> kat
-//     a petla regulacji chodzi z realna czestotliwoscia (DT = 1 kHz).
+//   - Tutaj os drona jest STALYM modelem 1. rzedu (petla predkosci):
+//        I * d(theta)/dt = moment - DAMPING*theta + zaklocenie
+//     gdzie theta = mierzona wielkosc (np. predkosc katowa z zyroskopu),
+//     a petla regulacji chodzi z realna czestotliwoscia (DT -> 5 kHz).
+//   - Model jest STALY: parametry PID stroimy DO modelu, nie odwrotnie.
 //
 //  CO MIERZY (3 scenariusze, metryki wypisywane na koniec):
 //   1) SKOK ZADANIA   -> przeregulowanie, czas narastania, czas
@@ -57,17 +59,22 @@ module tb_pid_controller;
     // ---------------------------------------------------------------
     //  MODEL FIZYCZNY (real — tylko symulacja, NIE syntezowalne)
     // ---------------------------------------------------------------
-    real DT          = 0.004;    // krok regulacji [s] -> 250 Hz (typowa petla atitude)
-    real ANGLE_SCALE = 100.0;    // county na 1 stopien (10 deg = 1000 cnt)
+    real DT          = 0.0002;   // krok regulacji [s] -> 5 kHz (cel: 5-10 kHz)
+    real ANGLE_SCALE = 100.0;    // county na jednostke pomiaru (10 -> 1000 cnt)
+    // --- STALY model fizyczny (NIE dobieramy go do nastaw PID!) ---
     real INERTIA     = 1.0;      // bezwladnosc osi
-    real DAMPING     = 0.04;     // tlumienie aerodynamiczne
-    real ACT_GAIN    = 0.0005;   // moment na jednostke pid_out
+    real DAMPING     = 0.5;      // tlumienie (aero) w petli predkosci
+    real ACT_GAIN    = 0.02;     // moment na jednostke pid_out
 
-    // UWAGA o czestotliwosci petli: czlon D w DUT to (error - prev_error) na
-    // probke, BEZ dzielenia przez dt. Przy bardzo szybkiej petli (np. 1 kHz)
-    // i drobnej rozdzielczosci kata zmiana bledu na probke spada < 1 count i
-    // pochodna kwantuje sie do 0/+-1 -> czlon D przestaje tlumic. 250 Hz daje
-    // tu sensowna pochodna. To realne ograniczenie tej implementacji.
+    // WAZNE przy 5-10 kHz: ten DUT liczy calke i pochodna "na probke",
+    // BEZ skalowania przez dt:
+    //   - calka: integral += error co probke -> przy 5-10 kHz narasta
+    //     ~5000-10000x/s i blyskawicznie dobija do limitu +-500000 (windup).
+    //     Efektywne KI ~ KI * f_probkowania -> nawet KI=1 jest "ogromne".
+    //   - pochodna: (error - prev_error) -> przy tak szybkiej petli zmiana
+    //     bledu na probke jest mala i kwantuje sie do ~0 (czlon D slabnie).
+    // Wniosek praktyczny: albo KI bardzo male/0, albo (lepiej) przeskaluj
+    // czlony I/D przez dt w RTL, by nastawy nie zalezaly od czestotliwosci.
 
     real theta        = 0.0;     // kat [deg]
     real omega        = 0.0;     // predkosc katowa [deg/s]
@@ -131,12 +138,16 @@ module tb_pid_controller;
         // policz wyjscie regulatora (DUT)
         pid_step(err_i[15:0]);
 
-        // pid_out -> moment; calkowanie fizyki (Euler jawny)
+        // pid_out -> moment; obiekt PIERWSZEGO RZEDU (petla predkosci):
+        //   I * d(theta)/dt = moment - DAMPING*theta + zaklocenie
+        // theta = mierzona wielkosc (np. predkosc katowa z zyroskopu).
+        // Model 1. rzedu jest stabilny i ladnie zbiezny (czlon I kasuje
+        // blad ustalony), zgodnie z petla regulacji opartą na zyroskopie.
         pr    = pid_out;                 // signed [47:0] -> real (ze znakiem)
         ctrl  = pr * ACT_GAIN;
-        accel = (ctrl + dist_torque - DAMPING * omega) / INERTIA;
-        omega = omega + accel * DT;
-        theta = theta + omega * DT;
+        accel = (ctrl + dist_torque - DAMPING * theta) / INERTIA;
+        theta = theta + accel * DT;
+        omega = accel;                   // pochodna (do podgladu w VCD)
 
         // sygnaly debug do VCD
         theta_mdeg    = $rtoi(theta        * 1000.0);
@@ -204,7 +215,10 @@ module tb_pid_controller;
                   (max_theta > target) ? (max_theta - target) / target * 100.0 : 0.0);
         $display("  Czas narastania : %.3f s (10%%->90%%)",
                   (t_rise90 > 0.0 && t_rise10 > 0.0) ? (t_rise90 - t_rise10) : -1.0);
-        $display("  Czas ustalania  : %.3f s (pasmo +-2%%; = okno fazy => brak ustalenia)", t_settle);
+        if (t_settle >= (N_STEP - 2) * DT)
+            $display("  Czas ustalania  : NIE ustalil sie w oknie %.1f s (pasmo +-2%%)", N_STEP * DT);
+        else
+            $display("  Czas ustalania  : %.3f s (pasmo +-2%%)", t_settle);
         $display("  Blad ustalony   : %.3f deg (srednia)", ss_err);
         $display("  Oscylacja reszt.: %.3f deg p-p (cykl graniczny w oknie ustalenia)",
                   ss_max - ss_min);
@@ -227,7 +241,12 @@ module tb_pid_controller;
         $display("");
         $display("--- 2) PODMUCH  (moment=%.0f przez %.2f s) ---", 60.0, N_GUST * DT);
         $display("  Max odchylenie  : %.3f deg", peak_dev);
-        $display("  Czas powrotu    : %.3f s (do pasma +-2%%)", t_recover);
+        if (t_recover < 0.0)
+            $display("  Czas powrotu    : < %.4f s (powrot natychmiastowy)", DT);
+        else if (t_recover >= (N_REC - 2) * DT)
+            $display("  Czas powrotu    : NIE wrocil w %.1f s (do pasma +-2%%)", N_REC * DT);
+        else
+            $display("  Czas powrotu    : %.3f s (do pasma +-2%%)", t_recover);
 
         // ---------------- Faza 3: SZUM CZUJNIKA -----------------------
         noise_amp = 0.3;                           // +-0.3 deg szumu
